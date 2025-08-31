@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+
+from scipy.linalg import pinvh
 from sklearn.preprocessing import StandardScaler
 import logging
 
@@ -24,11 +26,11 @@ NUMERICAL_FEATURES = ['年龄', '身高', '体重', 'BMI', '前白细胞', '前�
 # 加载模型和预处理器
 model = None
 scaler = None
-selected_features = None
+selected_features = ['性别', '年龄', '高血压', 'BMI', '前白细胞', '前血小板', '前淋巴细胞', 'NLR', '前红细胞', '前血红蛋白', '前单核细胞', '前尿白细胞', '前肌酐', '前尿酸', '白蛋白', '球蛋白', '手术时间']
 
 def load_model():
     """加载训练好的模型"""
-    global model, scaler, selected_features
+    global model, scaler
     try:
         # 加载SVM模型
         model = joblib.load('svm_model.pkl')
@@ -41,15 +43,10 @@ def load_model():
         if os.path.exists('original_data_samples.xlsx'):
             df = pd.read_excel('original_data_samples.xlsx')
             numeric_cols = [col for col in NUMERICAL_FEATURES if col in df.columns]
-            if numeric_cols:
-                scaler.fit(df[numeric_cols])
-                logger.info("标准化器拟合成功")
-        
-        # 设置选定的特征（这里需要根据您的Lasso特征选择结果）
-        # 您可以根据实际训练结果修改这个列表
-        selected_features = NUMERICAL_FEATURES + [f"{col}_{val}" for col in CATEGORICAL_FEATURES 
-                                                for val in ['男', '女', '有', '无', '阳性', '阴性', '1', '2', '3', '左肾', '右肾', '双侧']]
-        
+            df = pd.get_dummies(df, columns=CATEGORICAL_FEATURES)
+            scaler.fit(df[numeric_cols])
+            logger.info("标准化器拟合成功")
+
         return True
     except Exception as e:
         logger.error(f"模型加载失败: {e}")
@@ -60,14 +57,14 @@ def preprocess_data(data):
     try:
         # 处理分类变量 - 使用one-hot编码
         categorical_data = data[CATEGORICAL_FEATURES].copy()
-        categorical_dummies = pd.get_dummies(categorical_data, columns=CATEGORICAL_FEATURES)
-        
+        # categorical_dummies = pd.get_dummies(categorical_data, columns=CATEGORICAL_FEATURES)
+
         # 处理数值变量
         numerical_data = data[NUMERICAL_FEATURES].copy()
         
         # 处理缺失值
         numerical_data = numerical_data.fillna(numerical_data.median())
-        categorical_dummies = categorical_dummies.fillna(0)
+        categorical_dummies = categorical_data.fillna(0)
         
         # 标准化数值特征
         if scaler is not None:
@@ -76,10 +73,10 @@ def preprocess_data(data):
                 columns=NUMERICAL_FEATURES,
                 index=numerical_data.index
             )
-        
+
         # 合并特征
         processed_data = pd.concat([numerical_data, categorical_dummies], axis=1)
-        
+        # print(processed_data)
         # 确保所有必要的特征都存在
         for feature in selected_features:
             if feature not in processed_data.columns:
@@ -104,23 +101,24 @@ def health_check():
 def predict():
     """预测端点"""
     try:
+        if model is None or selected_features is None:
+            if not load_model():
+                return jsonify({'error': '模型未加载'}), 500
+
         if request.is_json:
             # JSON数据
             data = request.get_json()
             if 'data' not in data:
                 return jsonify({'error': '缺少数据字段'}), 400
-            
             # 转换为DataFrame
             df = pd.DataFrame(data['data'])
         else:
             # 文件上传
             if 'file' not in request.files:
                 return jsonify({'error': '没有文件上传'}), 400
-            
             file = request.files['file']
             if file.filename == '':
                 return jsonify({'error': '没有选择文件'}), 400
-            
             # 读取文件
             if file.filename.endswith('.csv'):
                 df = pd.read_csv(file)
@@ -128,18 +126,20 @@ def predict():
                 df = pd.read_excel(file)
             else:
                 return jsonify({'error': '不支持的文件格式，请上传CSV或Excel文件'}), 400
-        
         # 检查必要的列
         required_columns = CATEGORICAL_FEATURES + NUMERICAL_FEATURES
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
+        missing_columns = [col for col in required_columns if col not in list(df.columns)]
+        if isinstance(missing_columns, list) and len(missing_columns) > 0:
             return jsonify({
                 'error': f'缺少必要的列: {missing_columns}',
                 'required_columns': required_columns
             }), 400
-        
-        # 预处理数据
+        # logger.info(f"model: {model}")
+        # logger.info(f"selected_features: {selected_features}")
+        # logger.info(f"df columns: {df.columns}")
+        # 预处理
         df_processed = preprocess_data(df[required_columns].copy())
+        logger.info(f"df_processed columns: {df_processed.columns}")
         
         # 预测
         if model is None:
@@ -205,5 +205,4 @@ if __name__ == '__main__':
         logger.info("系统启动成功，模型已加载")
     else:
         logger.error("系统启动失败，模型加载失败")
-    
     app.run(debug=True, host='0.0.0.0', port=5001)
