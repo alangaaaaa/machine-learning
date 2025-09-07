@@ -6,7 +6,8 @@
       "use": "@vercel/python",
       "config": {
         "maxLambdaSize": "50mb",
-        "runtime": "python3.11"
+        "runtime": "python3.11",
+        "maxDuration": 30
       }
     },
     {
@@ -28,11 +29,6 @@
       "dest": "frontend/$1"
     }
   ],
-  "functions": {
-    "backend/app.py": {
-      "maxDuration": 30
-    }
-  },
   "env": {
     "PYTHONPATH": "backend",
     "PIP_ONLY_BINARY": ":all:",
