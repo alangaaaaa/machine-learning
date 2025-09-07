@@ -32,7 +32,11 @@ def load_model():
         from sklearn.preprocessing import StandardScaler
         
         # 加载SVM模型
-        model_path = 'svm_model.pkl'
+        model_path = os.path.join(os.path.dirname(__file__), 'svm_model.pkl')
+        logger.info(f"尝试加载模型文件: {model_path}")
+        logger.info(f"当前工作目录: {os.getcwd()}")
+        logger.info(f"文件是否存在: {os.path.exists(model_path)}")
+        
         if os.path.exists(model_path):
             model = joblib.load(model_path)
             logger.info("SVM模型加载成功")
@@ -40,7 +44,7 @@ def load_model():
             # 如果模型文件不存在，使用默认SVM模型
             from sklearn.svm import SVC
             model = SVC(probability=True)
-            logger.warning("模型文件不存在，使用默认SVM模型")
+            logger.warning(f"模型文件不存在: {model_path}，使用默认SVM模型")
         
         # 初始化标准化器
         scaler = StandardScaler()
