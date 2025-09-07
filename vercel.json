@@ -13,7 +13,8 @@
       "src": "frontend/package.json",
       "use": "@vercel/static-build",
       "config": {
-        "distDir": "build"
+        "distDir": "build",
+        "buildCommand": "npm ci --only=production && npm run build"
       }
     }
   ],
@@ -27,10 +28,16 @@
       "dest": "frontend/$1"
     }
   ],
+  "functions": {
+    "backend/app.py": {
+      "maxDuration": 30
+    }
+  },
   "env": {
     "PYTHONPATH": "backend",
     "PIP_ONLY_BINARY": ":all:",
-    "PIP_NO_CACHE_DIR": "1",
-    "PIP_PREFER_BINARY": "1"
+    "PIP_NO_CACHE_DIR": "0",
+    "PIP_PREFER_BINARY": "1",
+    "NODE_ENV": "production"
   }
 }
