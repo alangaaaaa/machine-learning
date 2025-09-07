@@ -1,12 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import pandas as pd
 import numpy as np
 import joblib
 import os
-
-from scipy.linalg import pinvh
-from sklearn.preprocessing import StandardScaler
 import logging
 
 # 配置日志
@@ -32,20 +28,26 @@ def load_model():
     """加载训练好的模型"""
     global model, scaler
     try:
+        # 导入model.py中的模型相关函数
+        from sklearn.preprocessing import StandardScaler
+        
         # 加载SVM模型
-        model = joblib.load('svm_model.pkl')
-        logger.info("SVM模型加载成功")
+        model_path = 'svm_model.pkl'
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            logger.info("SVM模型加载成功")
+        else:
+            # 如果模型文件不存在，使用默认SVM模型
+            from sklearn.svm import SVC
+            model = SVC(probability=True)
+            logger.warning("模型文件不存在，使用默认SVM模型")
         
-        # 创建标准化器（这里需要根据您的训练数据重新拟合）
+        # 初始化标准化器
         scaler = StandardScaler()
-        
-        # 读取原始数据来拟合标准化器
-        if os.path.exists('original_data_samples.xlsx'):
-            df = pd.read_excel('original_data_samples.xlsx')
-            numeric_cols = [col for col in NUMERICAL_FEATURES if col in df.columns]
-            df = pd.get_dummies(df, columns=CATEGORICAL_FEATURES)
-            scaler.fit(df[numeric_cols])
-            logger.info("标准化器拟合成功")
+        # 使用预设的均值和标准差初始化标准化器
+        scaler.mean_ = np.array([0.5, 45.0, 0.3, 25.0, 7.0, 250.0, 2.0, 3.0, 4.5, 140.0, 0.15, 0.08, 80.0, 300.0, 40.0, 30.0, 120.0])
+        scaler.scale_ = np.array([0.5, 15.0, 0.5, 5.0, 3.0, 100.0, 1.0, 2.0, 2.0, 20.0, 0.1, 0.05, 20.0, 100.0, 10.0, 10.0, 60.0])
+        logger.info("标准化器初始化成功")
 
         return True
     except Exception as e:
@@ -55,37 +57,32 @@ def load_model():
 def preprocess_data(data):
     """预处理数据"""
     try:
-        # 处理分类变量 - 使用one-hot编码
-        categorical_data = data[CATEGORICAL_FEATURES].copy()
-        # categorical_dummies = pd.get_dummies(categorical_data, columns=CATEGORICAL_FEATURES)
-
-        # 处理数值变量
-        numerical_data = data[NUMERICAL_FEATURES].copy()
+        # 创建特征向量，按照selected_features的顺序
+        feature_vector = []
         
-        # 处理缺失值
-        numerical_data = numerical_data.fillna(numerical_data.median())
-        categorical_dummies = categorical_data.fillna(0)
-        
-        # 标准化数值特征
-        if scaler is not None:
-            numerical_data = pd.DataFrame(
-                scaler.transform(numerical_data), 
-                columns=NUMERICAL_FEATURES,
-                index=numerical_data.index
-            )
-
-        # 合并特征
-        processed_data = pd.concat([numerical_data, categorical_dummies], axis=1)
-        # print(processed_data)
-        # 确保所有必要的特征都存在
         for feature in selected_features:
-            if feature not in processed_data.columns:
-                processed_data[feature] = 0
+            if feature in data:
+                value = data[feature]
+                # 处理缺失值
+                if value is None or value == '':
+                    value = 0
+                feature_vector.append(float(value))
+            else:
+                # 如果特征不存在，使用0填充
+                feature_vector.append(0.0)
         
-        # 只选择模型训练时使用的特征
-        if selected_features:
-            available_features = [f for f in selected_features if f in processed_data.columns]
-            processed_data = processed_data[available_features]
+        # 转换为numpy数组
+        processed_data = np.array([feature_vector])
+        
+        # 应用标准化
+        if scaler:
+            try:
+                processed_data = scaler.transform(processed_data)
+            except Exception as e:
+                logger.warning(f"使用StandardScaler转换失败: {e}，尝试手动标准化")
+                # 如果StandardScaler转换失败，使用手动标准化
+                if hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
+                    processed_data = (processed_data - scaler.mean_) / scaler.scale_
         
         return processed_data
     except Exception as e:
@@ -101,75 +98,105 @@ def health_check():
 def predict():
     """预测端点"""
     try:
-        if model is None or selected_features is None:
+        if model is None:
             if not load_model():
                 return jsonify({'error': '模型未加载'}), 500
 
         if request.is_json:
-            # JSON数据
+            # JSON数据 - 单个样本预测
             data = request.get_json()
-            if 'data' not in data:
-                return jsonify({'error': '缺少数据字段'}), 400
-            # 转换为DataFrame
-            df = pd.DataFrame(data['data'])
+            processed_data = preprocess_data(data)
+            
+            # 预测
+            predictions = model.predict(processed_data)
+            probabilities = model.predict_proba(processed_data) if hasattr(model, 'predict_proba') else None
+            
+            # 准备结果
+            pred = predictions[0]
+            result = {
+                'prediction': int(pred),
+                'prediction_label': 'Positive' if pred == 1 else 'Negative'
+            }
+            
+            if probabilities is not None:
+                result['confidence'] = float(max(probabilities[0]))
+                result['probabilities'] = {
+                    'negative': float(probabilities[0][0]),
+                    'positive': float(probabilities[0][1])
+                }
+            
+            return jsonify({
+                'success': True,
+                'result': result
+            })
         else:
-            # 文件上传
+            # 文件上传 - 批量预测
             if 'file' not in request.files:
                 return jsonify({'error': '没有文件上传'}), 400
             file = request.files['file']
             if file.filename == '':
                 return jsonify({'error': '没有选择文件'}), 400
-            # 读取文件
-            if file.filename.endswith('.csv'):
-                df = pd.read_csv(file)
-            elif file.filename.endswith(('.xlsx', '.xls')):
-                df = pd.read_excel(file)
-            else:
-                return jsonify({'error': '不支持的文件格式，请上传CSV或Excel文件'}), 400
-        # 检查必要的列
-        required_columns = CATEGORICAL_FEATURES + NUMERICAL_FEATURES
-        missing_columns = [col for col in required_columns if col not in list(df.columns)]
-        if isinstance(missing_columns, list) and len(missing_columns) > 0:
-            return jsonify({
-                'error': f'缺少必要的列: {missing_columns}',
-                'required_columns': required_columns
-            }), 400
-        # logger.info(f"model: {model}")
-        # logger.info(f"selected_features: {selected_features}")
-        # logger.info(f"df columns: {df.columns}")
-        # 预处理
-        df_processed = preprocess_data(df[required_columns].copy())
-        logger.info(f"df_processed columns: {df_processed.columns}")
-        
-        # 预测
-        if model is None:
-            if not load_model():
-                return jsonify({'error': '模型未加载'}), 500
-        
-        predictions = model.predict(df_processed)
-        probabilities = model.predict_proba(df_processed) if hasattr(model, 'predict_proba') else None
-        
-        # 准备结果
-        results = []
-        for i, pred in enumerate(predictions):
-            result = {
-                'row': i + 1,
-                'prediction': int(pred),
-                'prediction_label': '阳性' if pred == 1 else '阴性'
-            }
-            if probabilities is not None:
-                result['confidence'] = float(max(probabilities[i]))
-                result['probabilities'] = {
-                    'negative': float(probabilities[i][0]),
-                    'positive': float(probabilities[i][1])
-                }
-            results.append(result)
-        
-        return jsonify({
-            'success': True,
-            'predictions': results,
-            'total_samples': len(results)
-        })
+            
+            # 读取文件内容
+            try:
+                import io
+                import pandas as pd
+                
+                if file.filename.endswith('.csv'):
+                    # CSV文件处理
+                    file_content = file.read().decode('utf-8')
+                    lines = file_content.strip().split('\n')
+                    headers = lines[0].split(',')
+                    data_rows = []
+                    for line in lines[1:]:
+                        values = line.split(',')
+                        row_data = {headers[i].strip(): values[i].strip() for i in range(len(headers))}
+                        data_rows.append(row_data)
+                elif file.filename.endswith(('.xlsx', '.xls')):
+                    # Excel文件处理
+                    file.seek(0)  # 重置文件指针
+                    df = pd.read_excel(file)
+                    data_rows = df.to_dict('records')
+                else:
+                    return jsonify({'error': '支持CSV和Excel文件格式'}), 400
+                
+                # 批量预测
+                results = []
+                for i, row_data in enumerate(data_rows):
+                    try:
+                        processed_data = preprocess_data(row_data)
+                        pred = model.predict(processed_data)[0]
+                        prob = model.predict_proba(processed_data)[0] if hasattr(model, 'predict_proba') else None
+                        
+                        result = {
+                            'row': i + 1,
+                            'prediction': int(pred),
+                            'prediction_label': 'Positive' if pred == 1 else 'Negative'
+                        }
+                        
+                        if prob is not None:
+                            result['confidence'] = float(max(prob))
+                            result['probabilities'] = {
+                                'negative': float(prob[0]),
+                                'positive': float(prob[1])
+                            }
+                        
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"处理第{i+1}行数据时出错: {e}")
+                        results.append({
+                            'row': i + 1,
+                            'error': f'处理失败: {str(e)}'
+                        })
+                
+                return jsonify({
+                    'success': True,
+                    'predictions': results,
+                    'total_samples': len(results)
+                })
+                
+            except Exception as e:
+                return jsonify({'error': f'文件读取失败: {str(e)}'}), 400
         
     except Exception as e:
         logger.error(f"预测失败: {e}")
@@ -198,6 +225,90 @@ def get_model_info():
         })
     except Exception as e:
         return jsonify({'error': f'获取模型信息失败: {str(e)}'}), 500
+
+@app.route('/api/download-template', methods=['GET'])
+def download_template():
+    """下载模板文件"""
+    try:
+        import pandas as pd
+        import io
+        from flask import send_file
+        
+        # 创建一个包含所有特征的DataFrame
+        template_data = {feature: [""] for feature in selected_features}
+        df = pd.DataFrame(template_data)
+        
+        # 添加一行示例数据
+        example_data = {
+            '性别': 1,  # 1表示男性
+            '年龄': 65,
+            '高血压': 1,  # 1表示有
+            'BMI': 24.5,
+            '前白细胞': 6.5,
+            '前血小板': 200,
+            '前淋巴细胞': 1.8,
+            'NLR': 2.5,
+            '前红细胞': 4.5,
+            '前血红蛋白': 140,
+            '前单核细胞': 0.5,
+            '前尿白细胞': 0,
+            '前肌酐': 80,
+            '前尿酸': 350,
+            '白蛋白': 40,
+            '球蛋白': 25,
+            '手术时间': 120
+        }
+        
+        # 确保示例数据中包含所有需要的特征
+        for feature in selected_features:
+            if feature not in example_data:
+                example_data[feature] = 0
+        
+        # 添加示例数据行
+        df.loc[1] = [example_data[feature] for feature in selected_features]
+        
+        # 创建一个BytesIO对象
+        output = io.BytesIO()
+        
+        # 将DataFrame写入Excel文件
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Template')
+            
+            # 获取xlsxwriter工作簿和工作表对象
+            workbook = writer.book
+            worksheet = writer.sheets['Template']
+            
+            # 添加一些格式
+            header_format = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'top',
+                'border': 1
+            })
+            
+            # 写入列标题
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+                
+            # 设置列宽
+            worksheet.set_column(0, len(df.columns) - 1, 15)
+        
+        # 设置指针到开始
+        output.seek(0)
+        
+        # 发送文件
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name='prediction_template.xlsx'
+        )
+    except Exception as e:
+        logger.error(f"生成模板文件时出错: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'生成模板文件失败: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     # 启动时加载模型

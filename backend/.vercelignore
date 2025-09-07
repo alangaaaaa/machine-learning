@@ -27,5 +27,18 @@ coverage.xml
 *.swo
 *~
 
-# 排除训练数据（可选，如果不需要的话）
-# original_data_samples.xlsx
+# 排除训练数据和测试文件
+original_data_samples.xlsx
+*.xlsx
+*.csv
+*.json
+test_*.py
+*_test.py
+tests/
+
+# 排除开发工具
+.vscode/
+.idea/
+*.md
+README*
+LICENSE*

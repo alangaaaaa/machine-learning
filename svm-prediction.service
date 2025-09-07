@@ -1,0 +1,24 @@
+[Unit]
+Description=SVM Medical Prediction Service
+After=network.target
+
+[Service]
+Type=forking
+User=alang
+WorkingDirectory=/Users/alang/svm-medical-prediction
+ExecStart=/Users/alang/svm-medical-prediction/start_services.sh start
+ExecStop=/Users/alang/svm-medical-prediction/start_services.sh stop
+ExecReload=/Users/alang/svm-medical-prediction/start_services.sh restart
+Restart=always
+RestartSec=10
+
+# 环境变量
+Environment=NODE_ENV=production
+Environment=FLASK_ENV=production
+
+# 日志配置
+StandardOutput=append:/Users/alang/svm-medical-prediction/logs/service.log
+StandardError=append:/Users/alang/svm-medical-prediction/logs/service-error.log
+
+[Install]
+WantedBy=multi-user.target
